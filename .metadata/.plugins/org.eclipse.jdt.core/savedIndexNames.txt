@@ -5,7 +5,6 @@ INDEX VERSION 1.126+C:\Users\Mads\Documents\GitHub\KTN\.metadata\.plugins\org.ec
 3015671029.index
 739078005.index
 683184654.index
-2481191392.index
 3521617142.index
 2706502329.index
 1820024274.index
