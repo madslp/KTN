@@ -3,6 +3,8 @@
  */
 package no.ntnu.fp.net.co;
 
+// TODO: Everything!
+
 import java.io.EOFException;
 import java.io.IOException;
 import java.net.ConnectException;
