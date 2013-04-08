@@ -3,8 +3,6 @@
  */
 package no.ntnu.fp.net.co;
 
-// TODO: Everything!
-
 import java.io.EOFException;
 import java.io.IOException;
 import java.net.ConnectException;
@@ -15,7 +13,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
 
-
+import sun.reflect.generics.reflectiveObjects.NotImplementedException;
 
 import no.ntnu.fp.net.admin.Log;
 import no.ntnu.fp.net.cl.ClException;
@@ -23,16 +21,16 @@ import no.ntnu.fp.net.cl.ClSocket;
 import no.ntnu.fp.net.cl.KtnDatagram;
 import no.ntnu.fp.net.cl.KtnDatagram.Flag;
 
-/** Test
+/**
  * Implementation of the Connection-interface. <br>
  * <br>
- * This class implements the behaviour in the methods specified in the interface
- * {@link Connection} over the unreliable, connectionless network realised in
+ * This class implements the behavior in the methods specified in the interface
+ * {@link Connection} over the unreliable, connection-less network realized in
  * {@link ClSocket}. The base class, {@link AbstractConnection} implements some
  * of the functionality, leaving message passing and error handling to this
  * implementation.
  * 
- * @author Sebjørn Birkeland and Stein Jakob Nordbø
+ * @author SebjÃ¸rn Birkeland and Stein Jakob NordbÃ¸
  * @see no.ntnu.fp.net.co.Connection
  * @see no.ntnu.fp.net.cl.ClSocket
  */
@@ -42,13 +40,19 @@ public class ConnectionImpl extends AbstractConnection {
     private static Map<Integer, Boolean> usedPorts = Collections.synchronizedMap(new HashMap<Integer, Boolean>());
 
     /**
-     * Initialise initial sequence number and setup state machine.
+     * Initialize initial sequence number and setup state machine.
      * 
      * @param myPort
      *            - the local port to associate with this connection
      */
     public ConnectionImpl(int myPort) {
-        throw new NotImplementedException();
+    	super();
+    	
+    	if(usedPorts.containsKey((Integer) myPort))
+    		throw new IllegalArgumentException("Cannot bind to port " + myPort + ". Already in use.");
+    	
+    	this.myPort = myPort;
+    	this.myAddress = getIPv4Address();
     }
 
     private String getIPv4Address() {
@@ -75,7 +79,27 @@ public class ConnectionImpl extends AbstractConnection {
      */
     public void connect(InetAddress remoteAddress, int remotePort) throws IOException,
             SocketTimeoutException {
-        throw new NotImplementedException();
+    	
+    	assert this.state == State.CLOSED:
+    		new IllegalStateException("Only a CLOSED Connection can connect().");
+    	
+    	KtnDatagram packet;
+    	
+    	packet = constructInternalPacket(Flag.SYN);
+
+    	try {
+			simplySendPacket(packet);
+		} catch (ClException e) {
+			throw new RuntimeException("Could not send initial SYN.", e);
+		}
+    	this.state = State.SYN_SENT;
+    	
+    	receiveAck();
+    	this.remoteAddress = remoteAddress.getHostAddress();
+    	this.remotePort = remotePort;
+    	this.state = State.ESTABLISHED;
+    	
+    	sendAck(packet, false);
     }
 
     /**
@@ -85,7 +109,15 @@ public class ConnectionImpl extends AbstractConnection {
      * @see Connection#accept()
      */
     public Connection accept() throws IOException, SocketTimeoutException {
-        throw new NotImplementedException();
+    	assert this.state == State.CLOSED:
+    		new IllegalStateException("Only a CLOSED Connection can accept().");
+    	
+    	KtnDatagram packet;
+    	while((packet = receivePacket(true)).getFlag() != Flag.SYN);
+    	packet.getDest_addr();
+    	
+
+    	return null;
     }
 
     /**
