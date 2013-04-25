@@ -5,6 +5,7 @@ package no.ntnu.fp.net.co;
 
 import java.io.EOFException;
 import java.io.IOException;
+import java.net.BindException;
 import java.net.ConnectException;
 import java.net.InetAddress;
 import java.net.SocketTimeoutException;
@@ -12,6 +13,8 @@ import java.net.UnknownHostException;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
+
+import javax.management.RuntimeErrorException;
 
 import sun.reflect.generics.reflectiveObjects.NotImplementedException;
 
@@ -49,7 +52,10 @@ public class ConnectionImpl extends AbstractConnection {
     	super();
     	
     	if(usedPorts.containsKey((Integer) myPort))
+    	//	throw new java.net.BindException("Cannot bind to port " + myPort + ". Already in use.");
     		throw new IllegalArgumentException("Cannot bind to port " + myPort + ". Already in use.");
+    	
+    	usedPorts.put(myPort, true);
     	
     	this.myPort = myPort;
     	this.myAddress = getIPv4Address();
@@ -64,6 +70,18 @@ public class ConnectionImpl extends AbstractConnection {
         }
     }
 
+    private KtnDatagram confirmAck(Flag flag) throws EOFException, IOException{
+    	KtnDatagram packet;
+    	// Problem: any garbage received will delay the timeout
+    	// TODO: Add timer checks
+    	do{
+    		packet = receiveAck();
+        	if(packet == null)
+        		throw new SocketTimeoutException("Timed out.");
+    	} while (  !(packet.getFlag() == flag && isValid(packet))  );
+    	return packet;
+    }
+    
     /**
      * Establish a connection to a remote location.
      * 
@@ -83,23 +101,45 @@ public class ConnectionImpl extends AbstractConnection {
     	assert this.state == State.CLOSED:
     		new IllegalStateException("Only a CLOSED Connection can connect().");
     	
-    	KtnDatagram packet;
+    	this.remoteAddress = remoteAddress.getHostAddress();
+    	this.remotePort = remotePort;
+    	this.myPort = findFreePort();
     	
+    	KtnDatagram packet;
+    
     	packet = constructInternalPacket(Flag.SYN);
-
     	try {
 			simplySendPacket(packet);
 		} catch (ClException e) {
-			throw new RuntimeException("Could not send initial SYN.", e);
+			throw new IOException("No route to host.", e);
+		} catch (ConnectException e) {
+			throw new IOException("Connection refused.", e);
 		}
+    	
     	this.state = State.SYN_SENT;
     	
-    	receiveAck();
-    	this.remoteAddress = remoteAddress.getHostAddress();
-    	this.remotePort = remotePort;
-    	this.state = State.ESTABLISHED;
+    	packet = confirmAck(Flag.SYN_ACK);
+
+    	this.remoteAddress = packet.getSrc_addr();
+    	this.remotePort = packet.getSrc_port();
     	
-    	sendAck(packet, false);
+    	sleep(400);
+    	
+    	try{
+    		sendAck(packet, false);
+    	} catch(ConnectException e){
+    		System.err.println("Big phail!");
+    		this.state = State.CLOSED;
+    		throw new IOException("Could not send final ACK in connect().", e);
+    	}
+
+    	this.state = State.ESTABLISHED;
+    }
+    
+    void sleep(long millis){
+    	try {
+			Thread.sleep(millis);
+		} catch (InterruptedException e) {System.err.println("Sleep interupted.");}
     }
 
     /**
@@ -112,12 +152,49 @@ public class ConnectionImpl extends AbstractConnection {
     	assert this.state == State.CLOSED:
     		new IllegalStateException("Only a CLOSED Connection can accept().");
     	
-    	KtnDatagram packet;
-    	while((packet = receivePacket(true)).getFlag() != Flag.SYN);
-    	packet.getDest_addr();
+    	this.state = State.LISTEN;
     	
+    	KtnDatagram packet;
+    	
+    	do{
+    		packet = receivePacket(true);
+    	} while ( packet == null || !(packet.getFlag() == Flag.SYN && isValid(packet))  );
 
-    	return null;
+    	ConnectionImpl connection = new ConnectionImpl(findFreePort());
+    	connection.syncConnection(packet);
+    	
+    	this.state = State.CLOSED;
+    	return connection;
+    }
+    
+    private int findFreePort(){
+    	int port;
+    	do{
+    		port = (int) (Math.random() * (Math.pow(2, 16) - 20000)) + 20000;
+    	} while (usedPorts.containsKey(port));
+    	return port;
+    }
+    
+    private Connection syncConnection(KtnDatagram synPacket) throws IOException{
+    	assert this.state == State.CLOSED;
+    	this.state = State.SYN_RCVD;
+    	
+    	this.remoteAddress = synPacket.getSrc_addr();
+    	this.remotePort = synPacket.getSrc_port();
+    	    	
+    	try{
+    		sendAck(synPacket, true);
+    	} catch(ConnectException e){
+    		System.out.println("SYN_ACK not sent.");
+    		// Too bad. Shit can time out.
+    	}
+    	
+    	confirmAck(Flag.ACK);
+    	
+    	this.state = State.ESTABLISHED;
+    	
+		return this;
+    	
     }
 
     /**
@@ -133,7 +210,7 @@ public class ConnectionImpl extends AbstractConnection {
      * @see no.ntnu.fp.net.co.Connection#send(String)
      */
     public void send(String msg) throws ConnectException, IOException {
-        throw new NotImplementedException();
+        sendDataPacketWithRetransmit(constructDataPacket(msg));
     }
 
     /**
@@ -145,7 +222,15 @@ public class ConnectionImpl extends AbstractConnection {
      * @see AbstractConnection#sendAck(KtnDatagram, boolean)
      */
     public String receive() throws ConnectException, IOException {
-        throw new NotImplementedException();
+    	KtnDatagram packet;
+    	try {
+    		packet = receivePacket(false);
+    	} catch (EOFException e){
+    		this.state = State.CLOSE_WAIT;
+    		throw e;
+    	}
+    	sendAck(packet, false);
+        return (String) packet.getPayload();
     }
 
     /**
@@ -154,7 +239,43 @@ public class ConnectionImpl extends AbstractConnection {
      * @see Connection#close()
      */
     public void close() throws IOException {
-        throw new NotImplementedException();
+    	assert this.state == State.ESTABLISHED || this.state == State.CLOSE_WAIT:
+    		new IllegalStateException("Can only close open sockets.");
+    	
+    	if(this.state == State.ESTABLISHED)
+    		this.state = State.FIN_WAIT_1;
+    	
+    	if(this.state == State.CLOSE_WAIT){
+    		this.state = State.LAST_ACK;
+    		this.state = State.CLOSED;
+    	}
+    	
+        KtnDatagram packet = constructInternalPacket(Flag.FIN);
+        sleep(200);
+        try {
+			simplySendPacket(packet);
+		} catch (ClException e) {
+			throw new IOException(e);
+		}
+        
+        // We should probably wait for an ACK and retransmit fin if necessary.
+        // However, a fin could come in before an ACK if both parties device to
+        // close connection independently.
+        
+        if(this.state == State.FIN_WAIT_1){
+        	int retry = 40;
+        	do {
+        		packet = receivePacket(true);
+        		if(packet == null && retry --== 0){
+        			throw new IOException("Timed out.");
+        		}
+        	} while(packet == null || packet.getFlag() != Flag.FIN);
+        	sendAck(packet, false);
+        	this.state = State.TIME_WAIT;
+        	this.state = State.CLOSED;
+        }
+        
+        
     }
 
     /**
@@ -166,6 +287,6 @@ public class ConnectionImpl extends AbstractConnection {
      * @return true if packet is free of errors, false otherwise.
      */
     protected boolean isValid(KtnDatagram packet) {
-        throw new NotImplementedException();
+    	return true;
     }
 }
