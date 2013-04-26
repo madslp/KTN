@@ -227,10 +227,12 @@ public abstract class AbstractConnection implements Connection {
      */
     protected synchronized KtnDatagram sendDataPacketWithRetransmit(KtnDatagram packet)
             throws IOException {
+    	/*
         if (state != State.ESTABLISHED)
             throw new IllegalStateException("Should only be used in ESTABLISHED state.");
         if (packet.getFlag() != Flag.NONE)
             throw new IllegalArgumentException("Packet must be a data packet.");
+            */
         /*
          * Algorithm: 1 Start a timer used to resend the packet with a specified
          * interval, and that immediately starts trying (sending the first
@@ -238,7 +240,8 @@ public abstract class AbstractConnection implements Connection {
          * receiveAck(). 3 Cancel the timer. 4 Return the ACK-packet.
          */
 
-        lastDataPacketSent = packet;
+    	if (packet.getFlag() == Flag.NONE)
+    		lastDataPacketSent = packet;
 
         // Create a timer that sends the packet and retransmits every
         // RETRANSMIT milliseconds until cancelled.
