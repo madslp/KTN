@@ -1,5 +1,5 @@
 /*
- * Created on Oct 27, 2004
+ * Created in April 2013
  */
 package no.ntnu.fp.net.co;
 
